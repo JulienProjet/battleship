@@ -8,7 +8,7 @@ import random
 class Agent:
     def __init__(self, size):
         self.size = size
-
+git 
     def make_move(self, board):
         raise NotImplementedError("This method should be overridden")
         
@@ -33,6 +33,7 @@ class Agent:
         self.size = size
         self.moves = set()
         self.last_hit = None  
+        self.attack=False
 
     def valid_moves(self, board):
         return [(row, col) for row in range(self.size) for col in range(self.size) if (row, col) not in self.moves]
@@ -57,6 +58,7 @@ class HitNearbyAgent(Agent):
         if self.last_hit is not None:
             # If the last move hit a ship, try to hit nearby cells
             row, col = self.last_hit
+            #print(row, col)
             nearby_cells = [(row-1, col), (row+1, col), (row, col-1), (row, col+1)]
             valid_nearby_cells = [cell for cell in nearby_cells if cell in self.valid_moves(board)]
             if valid_nearby_cells:
@@ -64,7 +66,66 @@ class HitNearbyAgent(Agent):
 
         # If the last move did not hit a ship or there are no valid nearby cells, choose a random move
         return random.choice(self.valid_moves(board))
+
+class HitAllNearbyAgent(Agent):
+    def __init__(self, size):
+        super().__init__(size)
+        self.first_hit = None
+        self.pending_moves = []
+        self.first_pending_moves = []
+        
+
+    def choose_move(self, board):
+        if self.last_hit is not None:
+            # If the last move hit a ship, try to hit nearby cells
+            row, col = self.last_hit
+            #print("success at",row,col)
+            #print(row, col)
+            nearby_cells = [(row-1, col), (row+1, col), (row, col-1), (row, col+1)]
+            valid_nearby_cells = [cell for cell in nearby_cells if cell in self.valid_moves(board)]
+            self.pending_moves = valid_nearby_cells
+            if self.first_hit is None:
+                self.first_hit = (row, col)
+                self.first_pending_moves = nearby_cells
+            #print(self.pending_moves)
+
+        if self.pending_moves:
+            move = random.choice(self.pending_moves)
+            self.pending_moves.remove(move)
+            return move
+        
+        if self.first_pending_moves:
+            #print("good")
+            self.first_pending_moves = [cell for cell in self.first_pending_moves if cell in self.valid_moves(board)]
+            #print("first",self.first_pending_moves)
+            if len(self.first_pending_moves)>0:
+                move = random.choice(self.first_pending_moves)
+                self.first_pending_moves.remove(move)
+                return move
+        
+        self.first_hit = None
+        # If the last move did not hit a ship or there are no valid nearby cells, choose a random move
+        return random.choice(self.valid_moves(board))
     
+"""
+class HitAllNearbyAgent(Agent):
+    def choose_move(self, board):
+        
+        if self.last_hit is not None:
+            # If the last move hit a ship, try to hit nearby cells
+            self.attack=True
+        while self.attack: 
+            row, col = self.last_hit
+            nearby_cells = [(row-1, col), (row+1, col), (row, col-1), (row, col+1)]
+            valid_nearby_cells = [cell for cell in nearby_cells if cell in self.valid_moves(board)]
+            if valid_nearby_cells:
+                return random.choice(valid_nearby_cells)
+            else:
+                self.attack=False
+
+        # If the last move did not hit a ship or there are no valid nearby cells, choose a random move
+        return random.choice(self.valid_moves(board))
+"""
     
 class BoardGUI:
     
@@ -170,6 +231,7 @@ class BoardGUI:
             self.boards[self.current_step][row][col] = 'X'  # Hit
             self.agent.last_hit = (row, col)  # Update last_hit
         else:
+            #print("miss at",row,col)
             self.boards[self.current_step][row][col] = '-'  # Miss
             self.agent.last_hit = None  # Update last_hit
 
@@ -224,6 +286,10 @@ def main():
     
     print("HitNearby agent :")
     hitNearby_average_score = get_agent_average(HitNearbyAgent,num_games=1000, ships=[5,5,5,5], display=True)  
+    
+    print("HitNearby agent :")
+    hitAllNearby_average_score = get_agent_average(HitAllNearbyAgent,num_games=1000, ships=[5,5,5,5], display=True)  
+    
     
 if __name__ == "__main__":
     main()

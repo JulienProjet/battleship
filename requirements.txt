@@ -1,0 +1,5 @@
+keras-rl2==1.0.5
+tensorflow==2.12.0
+gym==0.25.2
+gym[classic_control]
+pygame

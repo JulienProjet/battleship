@@ -3,31 +3,6 @@ from tkinter import ttk
 import copy
 import random
 
-"""
-
-class Agent:
-    def __init__(self, size):
-        self.size = size
-git 
-    def make_move(self, board):
-        raise NotImplementedError("This method should be overridden")
-        
-
-class RandomAgent(Agent):
-    def make_move(self, board):
-        while True:
-            row = random.randint(0, self.size - 1)
-            col = random.randint(0, self.size - 1)
-            if board[row][col] == ' ':
-                return row, col
-
-
-class SmartAgent(Agent):
-    def make_move(self, board):
-        # Implement a smarter strategy here
-        pass
-
-"""
 class Agent:
     def __init__(self, size):
         self.size = size
@@ -38,23 +13,23 @@ class Agent:
     def valid_moves(self, board):
         return [(row, col) for row in range(self.size) for col in range(self.size) if (row, col) not in self.moves]
 
-    def make_move(self, board):
-        row, col = self.choose_move(board)
+    def make_move(self, board, alive_ships,first_unsunk_hit):
+        row, col = self.choose_move(board, alive_ships,first_unsunk_hit)
         self.moves.add((row, col))
         return row, col
 
-    def choose_move(self, board):
+    def choose_move(self, board, alive_ships,first_unsunk_hit):
         raise NotImplementedError("This method should be overridden")
 
 
 class RandomAgent(Agent):
-    def choose_move(self, board):
+    def choose_move(self, board, alive_ships,first_unsunk_hit):
         #print(self.valid_moves(board))
         return random.choice(self.valid_moves(board))
 
 
 class HitNearbyAgent(Agent):
-    def choose_move(self, board):
+    def choose_move(self, board, alive_ships,first_unsunk_hit):
         if self.last_hit is not None:
             # If the last move hit a ship, try to hit nearby cells
             row, col = self.last_hit
@@ -75,7 +50,8 @@ class HitAllNearbyAgent(Agent):
         self.first_pending_moves = []
         
 
-    def choose_move(self, board):
+    def choose_move(self, board, alive_ships,first_unsunk_hit):
+        #print(alive_ships)
         if self.last_hit is not None:
             # If the last move hit a ship, try to hit nearby cells
             row, col = self.last_hit
@@ -106,27 +82,206 @@ class HitAllNearbyAgent(Agent):
         self.first_hit = None
         # If the last move did not hit a ship or there are no valid nearby cells, choose a random move
         return random.choice(self.valid_moves(board))
-    
-"""
-class HitAllNearbyAgent(Agent):
-    def choose_move(self, board):
-        
+
+class DirectionalHitAgent(Agent):
+    def __init__(self, size):
+        super().__init__(size)
+        self.first_hit = None
+        self.pending_moves = []
+        self.first_pending_moves = []
+        self.direction = None
+
+    def choose_move(self, board, alive_ships,first_unsunk_hit):
+        #print(alive_ships)
+        #print(self.first_hit,self.direction,self.pending_moves)
         if self.last_hit is not None:
             # If the last move hit a ship, try to hit nearby cells
-            self.attack=True
-        while self.attack: 
             row, col = self.last_hit
-            nearby_cells = [(row-1, col), (row+1, col), (row, col-1), (row, col+1)]
-            valid_nearby_cells = [cell for cell in nearby_cells if cell in self.valid_moves(board)]
-            if valid_nearby_cells:
-                return random.choice(valid_nearby_cells)
+            #print("success at",row,col)
+            #print(row, col)
+            if self.first_hit is None:
+                self.first_hit = (row, col)
+                self.first_pending_moves = [(row-1, col), (row+1, col), (row, col-1), (row, col+1)]
+                
+            elif self.direction is None:
+                self.direction = "horizontal" if row == self.first_hit[0] else "vertical"
+                
+            if self.direction is not None:
+                if self.direction == "horizontal":
+                    nearby_cells = [(row, col-1), (row, col+1)]
+                else:
+                    nearby_cells = [(row-1, col), (row+1, col)]
+                valid_nearby_cells = [cell for cell in nearby_cells if cell in self.valid_moves(board)]
+                self.pending_moves = valid_nearby_cells
             else:
-                self.attack=False
+                nearby_cells = [(row-1, col), (row+1, col), (row, col-1), (row, col+1)]
+                valid_nearby_cells = [cell for cell in nearby_cells if cell in self.valid_moves(board)]
+                self.pending_moves = valid_nearby_cells
+            
+                
+            #print(self.pending_moves)
 
+        if self.pending_moves:
+            move = random.choice(self.pending_moves)
+            self.pending_moves.remove(move)
+            return move
+        
+        if self.first_pending_moves:
+            #print("good")
+            if self.direction is not None:
+                if self.direction == "horizontal":
+                    self.first_pending_moves = [cell for cell in self.first_pending_moves if cell in self.valid_moves(board) and cell[0] == self.first_hit[0]]
+                else:
+                    self.first_pending_moves = [cell for cell in self.first_pending_moves if cell in self.valid_moves(board) and cell[1] == self.first_hit[1]]    
+            else:
+                self.first_pending_moves = [cell for cell in self.first_pending_moves if cell in self.valid_moves(board)]
+            #print("first",self.first_pending_moves)
+            if len(self.first_pending_moves)>0:
+                move = random.choice(self.first_pending_moves)
+                self.first_pending_moves.remove(move)
+                return move
+        
+        self.first_hit = None
+        self.direction = None
         # If the last move did not hit a ship or there are no valid nearby cells, choose a random move
         return random.choice(self.valid_moves(board))
-"""
+
+class DirectionalSunkAgent(Agent):
+    def __init__(self, size):
+        super().__init__(size)
+        self.first_hit = None
+        self.pending_moves = []
+        self.first_pending_moves = []
+        self.direction = None
+        self.last_alive_ships = None 
+        self.last_chance = False
+        self.x_coord = None
+        self.y_coord = None
+        
+    def choose_move(self, board, alive_ships,first_unsunk_hit):
+        """
+        for b in board:
+            print(b)
+        """
+        #print(self.last_chance,alive_ships)
+        
+        if self.last_alive_ships is not None and self.last_alive_ships != alive_ships:
+            #print("A ship has sunk!")
+            if len(first_unsunk_hit) > 0 :
+                for i in first_unsunk_hit:
+                    row,col = i[0],i[1]
+                    nearby_cells = [(row-1, col), (row+1, col), (row, col-1), (row, col+1)]
+                    valid_nearby_cells = [cell for cell in nearby_cells if cell in self.valid_moves(board)]
+                    if len(valid_nearby_cells) > 0:
+                        x_coord,y_coord = row,col   
+                        break    
+                    else:
+                        x_coord,y_coord = None,None
+                        
+                if x_coord is not None and y_coord is not None: 
+
+                    #print(f"Coordinates of an unsunk hit: ({x_coord}, {y_coord})")
+                    self.first_hit = None
+                    self.direction = None
+                    self.last_hit = (x_coord, y_coord)
+                
+        elif self.last_chance == True:
+            #print('m')
+            self.last_chance = False
+            x_coord, y_coord = self.x_coord, self.y_coord
+            assert x_coord is not None and y_coord is not None
+            self.first_hit = None
+            self.direction = None
+            self.last_hit = (x_coord, y_coord)
+        #print(self.last_chance)    
+        self.last_alive_ships = alive_ships
+        #print(alive_ships)
+        #print(self.last_hit,self.first_hit,self.direction,self.pending_moves)
+        if self.last_hit is not None:
+            # If the last move hit a ship, try to hit nearby cells
+            row, col = self.last_hit
+            #print("success at",row,col)
+            #print(row, col)
+            if self.first_hit is None:
+                self.first_hit = (row, col)
+                self.first_pending_moves = [(row-1, col), (row+1, col), (row, col-1), (row, col+1)]
+                
+            elif self.direction is None:
+                self.direction = "horizontal" if row == self.first_hit[0] else "vertical"
+                
+            if self.direction is not None:
+                if self.direction == "horizontal":
+                    nearby_cells = [(row, col-1), (row, col+1)]
+                else:
+                    nearby_cells = [(row-1, col), (row+1, col)]
+                valid_nearby_cells = [cell for cell in nearby_cells if cell in self.valid_moves(board)]
+                self.pending_moves = valid_nearby_cells
+            else:
+                nearby_cells = [(row-1, col), (row+1, col), (row, col-1), (row, col+1)]
+                valid_nearby_cells = [cell for cell in nearby_cells if cell in self.valid_moves(board)]
+                self.pending_moves = valid_nearby_cells
+        #print(self.last_hit,self.first_hit,self.direction,self.pending_moves,self.first_pending_moves)
+                
+            #print(self.pending_moves)
+
+        if self.pending_moves:
+            move = random.choice(self.pending_moves)
+            self.pending_moves.remove(move)
+            return move
+        
+        if self.first_pending_moves:
+            #print("good")
+            if self.direction is not None:
+                if self.direction == "horizontal":
+                    self.first_pending_moves = [cell for cell in self.first_pending_moves if cell in self.valid_moves(board) and cell[0] == self.first_hit[0]]
+                else:
+                    self.first_pending_moves = [cell for cell in self.first_pending_moves if cell in self.valid_moves(board) and cell[1] == self.first_hit[1]]    
+            else:
+                #print("oui")
+                self.first_pending_moves = [cell for cell in self.first_pending_moves if cell in self.valid_moves(board)]
+                #print(self.first_pending_moves)
+            #print("first",self.first_pending_moves)
+            if len(self.first_pending_moves)>0:
+                move = random.choice(self.first_pending_moves)
+                self.first_pending_moves.remove(move)
+                #print("VERY good")
+                return move
+        
+        if len(first_unsunk_hit) > 0 :
+                for i in first_unsunk_hit:
+                    row,col = i[0],i[1]
+                    nearby_cells = [(row-1, col), (row+1, col), (row, col-1), (row, col+1)]
+                    valid_nearby_cells = [cell for cell in nearby_cells if cell in self.valid_moves(board)]
+                    if len(valid_nearby_cells) > 0:
+                        x_coord,y_coord = row,col   
+                        break     
+                    else:
+                        x_coord,y_coord = None,None
+                if x_coord is not None and y_coord is not None:
+                    
+                    self.x_coord = x_coord
+                    self.y_coord = y_coord
+                    self.last_chance = True
+                    return self.choose_move(board, alive_ships,first_unsunk_hit)
+        else:
+            self.first_hit = None
+            self.direction = None
+        # If the last move did not hit a ship or there are no valid nearby cells, choose a random move
+        return random.choice(self.valid_moves(board))
     
+
+class Ship:
+    def __init__(self, size, row, col, direction):
+        self.size = size
+        self.row = row
+        self.col = col
+        self.direction = direction
+        self.hits = 0
+
+    def is_sunk(self):
+        return self.hits == self.size
+
+
 class BoardGUI:
     
     def auto_play(self):
@@ -156,7 +311,7 @@ class BoardGUI:
         self.game_over = False
         self.agent = agent
         self.display = display
-        self.ships = ships
+        self.ships = [Ship(size, 0, 0, "horizontal") for size in ships]
 
         if self.display:
             self.frame = tk.Frame(self.master)
@@ -164,11 +319,6 @@ class BoardGUI:
             self.create_widgets()
         self.place_ships()
         self.auto_play()
-        
-        
-    
-        
-    
 
     def create_widgets(self):
         self.text_area = tk.Text(self.frame, width=60, height=30)
@@ -189,22 +339,50 @@ class BoardGUI:
 
     def place_ships(self):
         board = [[' ' for _ in range(self.size)] for _ in range(self.size)]
-        for size in self.ships:
-            direction = random.choice(["vertical", "horizontal"])
+        for ship in self.ships:
             while True:
                 row = random.randint(0, self.size - 1)
                 col = random.randint(0, self.size - 1)
-                if direction == "horizontal" and col + size <= self.size and all(board[row][col + i] == ' ' for i in range(size)):
-                    for i in range(size):
+                direction = random.choice(["vertical", "horizontal"])
+                if direction == "horizontal" and col + ship.size <= self.size and all(board[row][col + i] == ' ' for i in range(ship.size)):
+                    for i in range(ship.size):
                         board[row][col + i] = 'O'
+                    ship.row, ship.col, ship.direction = row, col, direction
                     break
-                elif direction == "vertical" and row + size <= self.size and all(board[row + i][col] == ' ' for i in range(size)):
-                    for i in range(size):
+                elif direction == "vertical" and row + ship.size <= self.size and all(board[row + i][col] == ' ' for i in range(ship.size)):
+                    for i in range(ship.size):
                         board[row + i][col] = 'O'
+                    ship.row, ship.col, ship.direction = row, col, direction
                     break
         self.boards.append(board)
         self.update_board()
-
+        
+    def get_alive_ships(self):
+        return [ship.size for ship in self.ships if not ship.is_sunk()]
+    
+    def get_first_unsunk_hit(self):
+        for i, row in enumerate(self.boards[self.current_step]):
+            for j, cell in enumerate(row):
+                if cell == 'X':
+                    for ship in self.ships:
+                        if ship.direction == "horizontal" and ship.row == i and ship.col <= j < ship.col + ship.size and not ship.is_sunk():
+                            return i, j
+                        elif ship.direction == "vertical" and ship.col == j and ship.row <= i < ship.row + ship.size and not ship.is_sunk():
+                            return i, j
+        return None, None
+    
+    def get_unsunk_hits(self):
+        unsunk_hits = []
+        for i, row in enumerate(self.boards[self.current_step]):
+            for j, cell in enumerate(row):
+                if cell == 'X':
+                    for ship in self.ships:
+                        if ship.direction == "horizontal" and ship.row == i and ship.col <= j < ship.col + ship.size and not ship.is_sunk():
+                            unsunk_hits.append((i, j))
+                        elif ship.direction == "vertical" and ship.col == j and ship.row <= i < ship.row + ship.size and not ship.is_sunk():
+                            unsunk_hits.append((i, j))
+        return unsunk_hits
+    
     def update_board(self):
         if self.display:
             self.text_area.delete(1.0, tk.END)
@@ -214,6 +392,9 @@ class BoardGUI:
             for i, row in enumerate(self.boards[self.current_step]):
                 self.text_area.insert(tk.END, f"{i+1:2}| {'|'.join(row)} |\n")
                 self.text_area.insert(tk.END, "  " + "+-+-+-+-+-+-+-+-+-+-+\n")
+            for ship in self.ships:
+                if not ship.is_sunk():
+                    self.text_area.insert(tk.END, f"\nShip of size {ship.size} is still alive.\n")
             self.moves_label.config(text=f"Score: {self.score}, Turn: {self.current_step +1}/{len(self.boards)}")
             self.slider.config(to=len(self.boards) - 1)
             self.slider.set(self.current_step)
@@ -223,13 +404,29 @@ class BoardGUI:
     def next_step(self):
         if self.current_step >= len(self.boards):
             return
-        row, col = self.agent.make_move(self.boards[self.current_step])
+        alive_ships = self.get_alive_ships()
+        row, col = self.agent.make_move(self.boards[self.current_step], alive_ships,first_unsunk_hit=self.get_unsunk_hits())
         self.moves.append((row, col))
         self.score += 1
         
         if self.boards[self.current_step][row][col] == 'O':
             self.boards[self.current_step][row][col] = 'X'  # Hit
             self.agent.last_hit = (row, col)  # Update last_hit
+            for ship in self.ships:
+                if ship.direction == "horizontal" and ship.row == row and ship.col <= col < ship.col + ship.size:
+                    ship.hits += 1
+                    """
+                    if ship.is_sunk():
+                        print(f"\nShip of size {ship.size} sunk!\n")
+                        print("score : ",self.score)
+                    """
+                elif ship.direction == "vertical" and ship.col == col and ship.row <= row < ship.row + ship.size:
+                    ship.hits += 1
+                    """
+                    if ship.is_sunk():
+                        print(f"\nShip of size {ship.size} sunk!\n")
+                        print("score : ",self.score)
+                    """
         else:
             #print("miss at",row,col)
             self.boards[self.current_step][row][col] = '-'  # Miss
@@ -281,14 +478,21 @@ def get_agent_average(agent_class, num_games=100, ships=[5, 4, 3, 3, 2], display
     return average_score
 
 def main():
+    
     print("Random agent :")
-    rand_average_score = get_agent_average(RandomAgent,num_games=1000, ships=[5,5,5,5], display=True)  # Pass the class, not an instance
+    rand_average_score = get_agent_average(RandomAgent,num_games=1, ships=[5,4,3,3,2], display=True)  # Pass the class, not an instance
     
     print("HitNearby agent :")
-    hitNearby_average_score = get_agent_average(HitNearbyAgent,num_games=1000, ships=[5,5,5,5], display=True)  
+    hitNearby_average_score = get_agent_average(HitNearbyAgent,num_games=1000, ships=[5,4,3,3,2], display=True)  
     
     print("HitNearby agent :")
-    hitAllNearby_average_score = get_agent_average(HitAllNearbyAgent,num_games=1000, ships=[5,5,5,5], display=True)  
+    hitAllNearby_average_score = get_agent_average(HitAllNearbyAgent,num_games=1000, ships=[5,4,3,3,2], display=True)  
+    
+    print("DirectionalHit agent :")
+    DirectionalHitagent_average_score = get_agent_average(DirectionalHitAgent,num_games=1000, ships=[5,4,3,3,2], display=True)  
+    
+    print("DirectionalSunk agent :")
+    DirectionalSunkagent_average_score = get_agent_average(DirectionalSunkAgent,num_games=1000, ships=[5,4,3,3,2], display=True)  
     
     
 if __name__ == "__main__":

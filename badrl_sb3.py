@@ -7,7 +7,13 @@ import numpy as np
 import warnings
 
 from stable_baselines3 import A2C
+from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+
+from sb3_contrib import MaskablePPO
+from sb3_contrib.common.maskable.evaluation import evaluate_policy
+from sb3_contrib.common.maskable.utils import get_action_masks
 
 warnings.filterwarnings("ignore")
 
@@ -73,7 +79,19 @@ class BattleShipEnv(gym.Env):
         # Render the environment to the screen
         print(self.state)
 
+    def action_masks(self):
+        # Generate action mask
+        action_mask = np.ones(self.size * self.size, dtype=bool)
 
+        # Flatten the state for iteration
+        flat_state = self.state.flatten()
+
+        # Iterate over flattened state to mask invalid actions
+        for i in range(len(flat_state)):
+            if flat_state[i] != 0:
+                action_mask[i] = False
+
+        return action_mask
 
     def place_ship(self, ship_size):
         # Place a ship of given size on the board
@@ -94,7 +112,22 @@ class BattleShipEnv(gym.Env):
 
 #env = BattleShipEnv()
 
-vec_env = make_vec_env(BattleShipEnv, n_envs=4)
+#vec_env = make_vec_env(BattleShipEnv, n_envs=1)
+env = BattleShipEnv(size=6,ships=[4,3])
+#model = A2C("MlpPolicy", vec_env, verbose=1)
+env = DummyVecEnv([lambda: env])
 
-model = A2C("MlpPolicy", vec_env, verbose=1)
-model.learn(total_timesteps=1000000)
+model = MaskablePPO("MlpPolicy", env, verbose=1)
+model.learn(total_timesteps=100000)
+
+model.save("ppo_battleship")
+print('yo')
+#model.load("a2c_battleship")
+model = MaskablePPO.load("ppo_battleship")
+print('yo2')
+eval_env = make_vec_env(BattleShipEnv, n_envs=1)
+print('yo3')
+from stable_baselines3.common.evaluation import evaluate_policy
+mean_reward, std_reward = evaluate_policy(model, eval_env, n_eval_episodes=1)
+
+print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")

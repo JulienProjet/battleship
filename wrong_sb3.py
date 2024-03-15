@@ -18,7 +18,9 @@ from stable_baselines3 import A2C
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.policies import ActorCriticPolicy
+from sb3_contrib import MaskablePPO
+from sb3_contrib.common.maskable.evaluation import evaluate_policy
+from sb3_contrib.common.maskable.utils import get_action_masks
 
 
 #warnings.filterwarnings("ignore")
@@ -33,8 +35,7 @@ class BattleShipEnv(gym.Env):
         #self.observation_space = Box(low=0, high=3, shape=(3, size, size), dtype=int)
         self.observation_space = Dict({
             'grid': Box(low=0, high=1, shape=(3, size, size), dtype=int),  # Grid observation
-            'ships_remaining': Box(low=0, high=max(ships), shape=(len(ships),), dtype=int),  # Ships remaining
-            'valid_actions': Box(low=0, high=1, shape=(2, size, size), dtype=bool)  # Valid actions
+            'ships_remaining': Box(low=0, high=max(ships), shape=(len(ships),), dtype=int)  # Ships remaining
         })
         # Initialize state
         self.state = np.zeros((4, size, size), dtype=int)
@@ -47,7 +48,19 @@ class BattleShipEnv(gym.Env):
         
         #self.ships_remaining = np.zeros((size,), dtype=int)
         self.ships_remaining = np.array(ships)
+        
+    def action_masks(self):
+        # Generate action mask
+        action_mask = np.ones(self.action_space.nvec, dtype=bool)
 
+        # Iterate over board to mask invalid actions
+        for row in range(self.size):
+            for col in range(self.size):
+                if self.state[0, row, col] != 0:
+                    action_mask[row, col] = False
+
+        return action_mask
+    
     def step(self, action):
         self.nb_steps += 1
         reward = -0.1
@@ -55,8 +68,7 @@ class BattleShipEnv(gym.Env):
         #row = action // self.size
         #col = action % self.size
         row,col = action
-    
-
+        
         if self.state[0, row, col] == 0:
             self.state[0, row, col] = 2  # Miss
             self.state[2, row, col] = 1  # Add this line
@@ -86,32 +98,14 @@ class BattleShipEnv(gym.Env):
             print("\nGame over, number of steps:", self.nb_steps)
             print("Number of invalid moves:", self.nb_invalid_move)
         
-        
-        valid_actions = self.state[0] == 0
-        action_mask = valid_actions.flatten()
-
-        # Update observation
-        self.observation = {
-            'grid': np.stack([self.state[1], self.state[2], self.state[3]]),
-            'ships_remaining': self.ships_remaining,
-            'valid_actions': action_mask  # Add action mask to observation
-        }
-        
-        self.observation = self.observation.reshape((2, 4, 4))
+        self.observation = {'grid': np.stack([self.state[1], self.state[2], self.state[3]]), 'ships_remaining': self.ships_remaining}
         
         info = {'total_invalid_moves': self.nb_invalid_move}
         return self.observation, reward, done, False, info
 
     def reset(self,seed=None):
         self.state = np.zeros((4, self.size, self.size), dtype=int)
-        valid_actions = np.ones((self.size, self.size), dtype=bool)
-        action_mask = np.stack([valid_actions]*2)
-
-        self.observation = {
-            'grid': np.zeros((3, self.size, self.size), dtype=int),
-            'ships_remaining': np.array(self.ships),
-            'valid_actions': action_mask  # Initialize action mask
-        }
+        self.observation = {'grid': np.zeros((3, self.size, self.size), dtype=int), 'ships_remaining': np.array(self.ships)}
         self.nb_steps = 0
         self.nb_invalid_move = 0
         for ship in self.ships:
@@ -160,8 +154,8 @@ class BattleShipEnv(gym.Env):
         
 # Créer l'environnement
 #env = BattleShipEnv(size=10,ships=[5,4,4,3,2])
-#env = BattleShipEnv(size=6,ships=[4,3])
-env = BattleShipEnv(size=4,ships=[3])
+env = BattleShipEnv(size=6,ships=[4,3])
+#env = BattleShipEnv(size=4,ships=[3])
 from stable_baselines3.common.monitor import Monitor
 env = Monitor(env, "./ppo_battleship_tensorboard/")
 
@@ -176,12 +170,13 @@ env = DummyVecEnv([lambda: env])
 import torch as th
 import torch.nn as nn
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+
+# Neural network for predicting action values
 class CustomCNN(BaseFeaturesExtractor):
     def __init__(self, observation_space: gym.spaces.Dict, features_dim: int=128):
         super(CustomCNN, self).__init__(observation_space, features_dim)
         
         n_input_channels = observation_space.spaces['grid'].shape[0]
-        self.size = observation_space.spaces['grid'].shape[1]
         
         self.cnn = nn.Sequential(
             nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1),
@@ -204,38 +199,16 @@ class CustomCNN(BaseFeaturesExtractor):
         self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
 
     def forward(self, observations: th.Tensor) -> th.Tensor:
-        grid_obs = observations['grid'].float()
+        grid_obs = observations['grid']
         return self.linear(self.cnn(grid_obs))
-    
-class MaskedActorCriticPolicy(ActorCriticPolicy):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def _get_latents(self, obs):
-        latent_pi = self.features_extractor(obs)
-        latent_vf = self.features_extractor(obs)
-        latent_sde = self.features_extractor(obs)
-        return latent_pi, latent_vf, latent_sde
-
-    def forward(self, obs, deterministic=False):
-        action_mask = obs['valid_actions'].view(obs['valid_actions'].shape[0], -1)
-        latent_pi, latent_vf, latent_sde = self._get_latents(obs)
-        logits = self.action_net(latent_pi)
-        
-        # Ensure action_mask has the same shape as logits
-        action_mask = action_mask.view(logits.shape)
-        
-        masked_logits = th.where(action_mask, logits, th.tensor(-1e10, device=logits.device))
-        values = self.value_net(latent_vf)
-        return self._get_action(masked_logits, deterministic=deterministic), values
     
 policy_kwargs = dict(
     features_extractor_class=CustomCNN,
-    net_arch=[dict(pi=[128, 128, 128], vf=[128, 128, 128])]
 )
         
 # Initialize agent
-model = PPO(MaskedActorCriticPolicy, env, policy_kwargs=policy_kwargs, verbose=1, tensorboard_log="./ppo_battleship_tensorboard/")
+model = MaskablePPO("MultiInputPolicy", env, gamma=0.4, policy_kwargs=policy_kwargs, verbose=1, tensorboard_log="./ppo_battleship_tensorboard/")
+
 # Créer l'agent
 #model = PPO("MlpPolicy", env, verbose=1, tensorboard_log="./ppo_battleship_tensorboard/")
 
